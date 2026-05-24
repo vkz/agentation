@@ -376,6 +376,77 @@ function findDebugSourceReact19(
   return null;
 }
 
+function cljsNamespaceToSourcePath(ns: string): string {
+  return `src/${ns.replace(/\./g, "/").replace(/-/g, "_")}.cljs`;
+}
+
+function isUsefulCljsNamespace(ns: string): boolean {
+  return !(
+    ns.startsWith("cljs.") ||
+    ns.startsWith("clojure.") ||
+    ns.startsWith("com.fulcrologic.") ||
+    ns.startsWith("goog.") ||
+    ns.startsWith("shadow.")
+  );
+}
+
+function getFulcroDomSource(element: HTMLElement): SourceLocation | null {
+  const sourceElement = element.closest("[data-fulcro-source]");
+  const rawSource = sourceElement?.getAttribute("data-fulcro-source")?.trim();
+  if (!rawSource) return null;
+
+  const match = rawSource.match(/^(.+):(\d+|\?)$/);
+  if (!match) return null;
+
+  const [, ns, line] = match;
+  if (!ns) return null;
+  if (!isUsefulCljsNamespace(ns)) return null;
+
+  return {
+    fileName: cljsNamespaceToSourcePath(ns),
+    lineNumber: line === "?" ? 1 : Number.parseInt(line, 10),
+  };
+}
+
+function getCljsComponentSource(fiber: ReactFiber): SourceLocation | null {
+  const type = fiber.type as
+    | {
+        displayName?: string;
+        "cljs$lang$ctorStr"?: string;
+      }
+    | undefined;
+  const componentName = type?.displayName || type?.["cljs$lang$ctorStr"];
+  if (!componentName || !componentName.includes("/")) return null;
+
+  const [ns] = componentName.split("/");
+  if (!ns) return null;
+  if (!isUsefulCljsNamespace(ns)) return null;
+
+  return {
+    fileName: cljsNamespaceToSourcePath(ns),
+    lineNumber: 1,
+    componentName,
+  };
+}
+
+function findCljsComponentSource(
+  fiber: ReactFiber,
+  maxDepth = 50
+): SourceLocation | null {
+  let current: ReactFiber | null | undefined = fiber;
+  let depth = 0;
+
+  while (current && depth < maxDepth) {
+    const source = getCljsComponentSource(current);
+    if (source) return source;
+
+    current = current.return;
+    depth++;
+  }
+
+  return null;
+}
+
 // =============================================================================
 // Stack-Trace Fallback for Source File Detection
 // =============================================================================
@@ -492,6 +563,8 @@ function parseComponentFrame(
   const skipPatterns = [
     /source-location/,
     /\/dist\/index\./,       // Our bundled output (dist/index.mjs, dist/index.js)
+    /agentation.*dist.*index/i,
+    /module\$node_modules\$agentation\$dist\$index/i,
     /node_modules\//,        // Any package in node_modules
     /react-dom/,
     /react\.development/,
@@ -671,6 +744,16 @@ function probeSourceWalk(
  * ```
  */
 export function getSourceLocation(element: HTMLElement): SourceLocationResult {
+  const fulcroDomSource = getFulcroDomSource(element);
+  if (fulcroDomSource) {
+    return {
+      found: true,
+      source: fulcroDomSource,
+      isReactApp: true,
+      isProduction: false,
+    };
+  }
+
   // Try to get fiber directly from the element (same approach as getReactComponentName)
   // This avoids detectReactApp() whose production heuristic can give false positives
   const fiber = getFiberFromElement(element);
@@ -701,6 +784,16 @@ export function getSourceLocation(element: HTMLElement): SourceLocationResult {
         columnNumber: debugInfo.source.columnNumber,
         componentName: debugInfo.componentName || undefined,
       },
+      isReactApp: true,
+      isProduction: false,
+    };
+  }
+
+  const cljsSource = findCljsComponentSource(fiber);
+  if (cljsSource) {
+    return {
+      found: true,
+      source: cljsSource,
       isReactApp: true,
       isProduction: false,
     };

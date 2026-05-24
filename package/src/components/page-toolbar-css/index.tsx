@@ -266,6 +266,102 @@ function isRenderableAnnotation(annotation: Annotation): boolean {
   return annotation.status !== "resolved" && annotation.status !== "dismissed";
 }
 
+function stopHostEvent(e: Event): void {
+  e.preventDefault();
+  e.stopPropagation();
+  e.stopImmediatePropagation?.();
+}
+
+function isAgentationChrome(element: Element): boolean {
+  return Boolean(
+    closestCrossingShadow(element, "[data-feedback-toolbar]") ||
+      closestCrossingShadow(element, "[data-annotation-marker]") ||
+      closestCrossingShadow(element, "[data-annotation-popup]"),
+  );
+}
+
+function isElementTopmostAtPoint(element: HTMLElement, x: number, y: number): boolean {
+  const topElement = document
+    .elementsFromPoint(x, y)
+    .find((candidate) => candidate instanceof HTMLElement && !isAgentationChrome(candidate));
+
+  return Boolean(topElement && (topElement === element || element.contains(topElement)));
+}
+
+function isElementVisiblySelectable(
+  element: HTMLElement,
+  selectionBounds?: { left: number; top: number; right: number; bottom: number },
+): boolean {
+  const rect = element.getBoundingClientRect();
+  const left = Math.max(rect.left, selectionBounds?.left ?? rect.left);
+  const top = Math.max(rect.top, selectionBounds?.top ?? rect.top);
+  const right = Math.min(rect.right, selectionBounds?.right ?? rect.right);
+  const bottom = Math.min(rect.bottom, selectionBounds?.bottom ?? rect.bottom);
+
+  if (left >= right || top >= bottom) return false;
+
+  const midX = (left + right) / 2;
+  const midY = (top + bottom) / 2;
+  const points = [
+    [midX, midY],
+    [left + 1, top + 1],
+    [right - 1, top + 1],
+    [left + 1, bottom - 1],
+    [right - 1, bottom - 1],
+  ];
+
+  return points.some(([x, y]) =>
+    x >= 0 &&
+    y >= 0 &&
+    x <= window.innerWidth &&
+    y <= window.innerHeight &&
+    isElementTopmostAtPoint(element, x, y),
+  );
+}
+
+const MEANINGFUL_DRAG_TAGS = new Set([
+  "BUTTON",
+  "A",
+  "INPUT",
+  "IMG",
+  "P",
+  "H1",
+  "H2",
+  "H3",
+  "H4",
+  "H5",
+  "H6",
+  "LI",
+  "LABEL",
+  "TD",
+  "TH",
+  "SECTION",
+  "ARTICLE",
+  "ASIDE",
+  "NAV",
+]);
+
+function isMeaningfulDragTarget(element: HTMLElement): boolean {
+  if (MEANINGFUL_DRAG_TAGS.has(element.tagName)) return true;
+
+  if (element.tagName === "DIV" || element.tagName === "SPAN") {
+    const hasText = element.textContent && element.textContent.trim().length > 0;
+    const isInteractive =
+      element.onclick !== null ||
+      element.getAttribute("role") === "button" ||
+      element.getAttribute("role") === "link" ||
+      element.classList.contains("clickable") ||
+      element.hasAttribute("data-clickable");
+
+    return Boolean(
+      (hasText || isInteractive) &&
+        !element.querySelector("p, h1, h2, h3, h4, h5, h6, button, a"),
+    );
+  }
+
+  return false;
+}
+
 function detectSourceFile(element: Element): string | undefined {
   const result = getSourceLocation(element as HTMLElement);
   const loc = result.found ? result : findNearestComponentSource(element as HTMLElement);
@@ -1985,11 +2081,11 @@ const [settings, setSettings] = useState<ToolbarSettings>(() => {
         "button, a, input, select, textarea, [role='button'], [onclick]",
       );
 
-      // Block interactions on interactive elements when enabled
-      if (settings.blockInteractions && isInteractive) {
-        e.preventDefault();
-        e.stopPropagation();
-        // Still create annotation on the interactive element
+      // Block the host app's handlers while annotating. React/Fulcro apps often
+      // attach onClick to non-semantic divs, so this cannot be limited to
+      // natively interactive elements.
+      if (settings.blockInteractions) {
+        stopHostEvent(e);
       }
 
       if (pendingAnnotation) {
@@ -2064,8 +2160,8 @@ const [settings, setSettings] = useState<ToolbarSettings>(() => {
     };
 
     // Use capture phase to intercept before element handlers
-    document.addEventListener("click", handleClick, true);
-    return () => document.removeEventListener("click", handleClick, true);
+    window.addEventListener("click", handleClick, true);
+    return () => window.removeEventListener("click", handleClick, true);
   }, [
     isActive,
     isDrawMode,
@@ -2122,6 +2218,33 @@ const [settings, setSettings] = useState<ToolbarSettings>(() => {
     };
   }, [isActive, pendingMultiSelectElements, createMultiSelectPendingAnnotation]);
 
+  // Block host app pointer handlers before they can interpret Agentation
+  // gestures as outside clicks. Do not preventDefault here, so browser
+  // compatibility mouse events still reach Agentation's drag handlers.
+  useEffect(() => {
+    if (!isActive || isDrawMode || isDesignMode || !settings.blockInteractions) return;
+
+    const handlePointerEvent = (e: PointerEvent) => {
+      const target = (e.composedPath()[0] || e.target) as HTMLElement;
+
+      if (closestCrossingShadow(target, "[data-feedback-toolbar]")) return;
+      if (closestCrossingShadow(target, "[data-annotation-marker]")) return;
+      if (closestCrossingShadow(target, "[data-annotation-popup]")) return;
+
+      e.stopPropagation();
+      e.stopImmediatePropagation?.();
+    };
+
+    window.addEventListener("pointerdown", handlePointerEvent, true);
+    window.addEventListener("pointermove", handlePointerEvent, true);
+    window.addEventListener("pointerup", handlePointerEvent, true);
+    return () => {
+      window.removeEventListener("pointerdown", handlePointerEvent, true);
+      window.removeEventListener("pointermove", handlePointerEvent, true);
+      window.removeEventListener("pointerup", handlePointerEvent, true);
+    };
+  }, [isActive, isDrawMode, isDesignMode, settings.blockInteractions]);
+
   // Multi-select drag - mousedown
   useEffect(() => {
     if (!isActive || pendingAnnotation || isDrawMode || isDesignMode) return;
@@ -2133,6 +2256,10 @@ const [settings, setSettings] = useState<ToolbarSettings>(() => {
       if (closestCrossingShadow(target, "[data-feedback-toolbar]")) return;
       if (closestCrossingShadow(target, "[data-annotation-marker]")) return;
       if (closestCrossingShadow(target, "[data-annotation-popup]")) return;
+
+      if (settings.blockInteractions) {
+        stopHostEvent(e);
+      }
 
       // Don't start drag on text elements - allow native text selection
       const textTags = new Set([
@@ -2183,9 +2310,9 @@ const [settings, setSettings] = useState<ToolbarSettings>(() => {
       mouseDownPosRef.current = { x: e.clientX, y: e.clientY };
     };
 
-    document.addEventListener("mousedown", handleMouseDown);
-    return () => document.removeEventListener("mousedown", handleMouseDown);
-  }, [isActive, pendingAnnotation, isDrawMode, isDesignMode]);
+    window.addEventListener("mousedown", handleMouseDown, true);
+    return () => window.removeEventListener("mousedown", handleMouseDown, true);
+  }, [isActive, pendingAnnotation, isDrawMode, isDesignMode, settings.blockInteractions]);
 
   // Multi-select drag - mousemove (fully optimized with direct DOM updates)
   useEffect(() => {
@@ -2193,6 +2320,10 @@ const [settings, setSettings] = useState<ToolbarSettings>(() => {
 
     const handleMouseMove = (e: MouseEvent) => {
       if (!mouseDownPosRef.current) return;
+
+      if (settings.blockInteractions) {
+        stopHostEvent(e);
+      }
 
       const dx = e.clientX - mouseDownPosRef.current.x;
       const dy = e.clientY - mouseDownPosRef.current.y;
@@ -2287,28 +2418,6 @@ const [settings, setSettings] = useState<ToolbarSettings>(() => {
         }
 
         const allMatching: DOMRect[] = [];
-        const meaningfulTags = new Set([
-          "BUTTON",
-          "A",
-          "INPUT",
-          "IMG",
-          "P",
-          "H1",
-          "H2",
-          "H3",
-          "H4",
-          "H5",
-          "H6",
-          "LI",
-          "LABEL",
-          "TD",
-          "TH",
-          "SECTION",
-          "ARTICLE",
-          "ASIDE",
-          "NAV",
-        ]);
-
         for (const el of candidateElements) {
           if (
             closestCrossingShadow(el, "[data-feedback-toolbar]") ||
@@ -2328,31 +2437,10 @@ const [settings, setSettings] = useState<ToolbarSettings>(() => {
             rect.left < right &&
             rect.right > left &&
             rect.top < bottom &&
-            rect.bottom > top
+            rect.bottom > top &&
+            isElementVisiblySelectable(el, { left, top, right, bottom })
           ) {
-            const tagName = el.tagName;
-            let shouldInclude = meaningfulTags.has(tagName);
-
-            // For divs and spans, only include if they have meaningful content
-            if (!shouldInclude && (tagName === "DIV" || tagName === "SPAN")) {
-              const hasText =
-                el.textContent && el.textContent.trim().length > 0;
-              const isInteractive =
-                el.onclick !== null ||
-                el.getAttribute("role") === "button" ||
-                el.getAttribute("role") === "link" ||
-                el.classList.contains("clickable") ||
-                el.hasAttribute("data-clickable");
-
-              if (
-                (hasText || isInteractive) &&
-                !el.querySelector("p, h1, h2, h3, h4, h5, h6, button, a")
-              ) {
-                shouldInclude = true;
-              }
-            }
-
-            if (shouldInclude) {
+            if (isMeaningfulDragTarget(el)) {
               // Check if any existing match contains this element (filter children)
               let dominated = false;
               for (const existingRect of allMatching) {
@@ -2394,9 +2482,9 @@ const [settings, setSettings] = useState<ToolbarSettings>(() => {
       }
     };
 
-    document.addEventListener("mousemove", handleMouseMove, { passive: true });
-    return () => document.removeEventListener("mousemove", handleMouseMove);
-  }, [isActive, pendingAnnotation, isDragging, DRAG_THRESHOLD]);
+    window.addEventListener("mousemove", handleMouseMove, true);
+    return () => window.removeEventListener("mousemove", handleMouseMove, true);
+  }, [isActive, pendingAnnotation, isDragging, DRAG_THRESHOLD, settings.blockInteractions]);
 
   // Multi-select drag - mouseup
   useEffect(() => {
@@ -2405,6 +2493,10 @@ const [settings, setSettings] = useState<ToolbarSettings>(() => {
     const handleMouseUp = (e: MouseEvent) => {
       const wasDragging = isDragging;
       const dragStart = dragStartRef.current;
+
+      if (settings.blockInteractions && (isDragging || dragStart)) {
+        stopHostEvent(e);
+      }
 
       if (isDragging && dragStart) {
         justFinishedDragRef.current = true;
@@ -2418,7 +2510,7 @@ const [settings, setSettings] = useState<ToolbarSettings>(() => {
         // Query all meaningful elements and check bounding box intersection
         const allMatching: { element: HTMLElement; rect: DOMRect }[] = [];
         const selector =
-          "button, a, input, img, p, h1, h2, h3, h4, h5, h6, li, label, td, th";
+          "button, a, input, img, p, h1, h2, h3, h4, h5, h6, li, label, td, th, div, span, section, article, aside, nav";
 
         document.querySelectorAll(selector).forEach((el) => {
           if (!(el instanceof HTMLElement)) return;
@@ -2441,8 +2533,10 @@ const [settings, setSettings] = useState<ToolbarSettings>(() => {
             rect.left < right &&
             rect.right > left &&
             rect.top < bottom &&
-            rect.bottom > top
+            rect.bottom > top &&
+            isElementVisiblySelectable(el, { left, top, right, bottom })
           ) {
+            if (!isMeaningfulDragTarget(el)) return;
             allMatching.push({ element: el, rect });
           }
         });
@@ -2550,9 +2644,9 @@ const [settings, setSettings] = useState<ToolbarSettings>(() => {
       }
     };
 
-    document.addEventListener("mouseup", handleMouseUp);
-    return () => document.removeEventListener("mouseup", handleMouseUp);
-  }, [isActive, isDragging]);
+    window.addEventListener("mouseup", handleMouseUp, true);
+    return () => window.removeEventListener("mouseup", handleMouseUp, true);
+  }, [isActive, isDragging, settings.blockInteractions]);
 
   // Fire webhook for annotation events - returns true on success, false on failure
   const fireWebhook = useCallback(
