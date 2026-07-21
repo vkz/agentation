@@ -6,16 +6,11 @@
     "dev": "pnpm --filter agentation watch & pnpm --filter feedback-tool-example dev",
     "build": "pnpm --filter agentation build",
     "example": "pnpm --filter feedback-tool-example dev",
-    "pack": "cd package && pnpm pack",
+    "pack": "pnpm --filter agentation build && pnpm --filter agentation pack",
     "mcp": "pnpm --filter agentation-mcp start",
     "publish:agentation": "pnpm --filter agentation publish --access public",
     "publish:mcp": "pnpm --filter agentation-mcp publish --access public",
     "publish:all": "pnpm publish:agentation && pnpm publish:mcp"
   },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "better-sqlite3",
-      "esbuild"
-    ]
-  }
+  "packageManager": "pnpm@11.9.0"
 }

@@ -2,3 +2,8 @@ packages:
   - 'package'
   - 'package/example'
   - 'mcp'
+
+allowBuilds:
+  '@parcel/watcher': true
+  better-sqlite3: true
+  esbuild: true
