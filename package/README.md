@@ -33,6 +33,17 @@ function App() {
 
 The toolbar appears in the bottom-right corner. Click to activate, then click any element to annotate it.
 
+### Fulcro source locations
+
+The `vkz` fork recognizes Fulcro's `data-fulcro-source` DOM annotations and reports the corresponding ClojureScript
+file and line instead of the compiled React wrapper. Enable them only in development builds:
+
+```clojure
+{:compiler-options
+ {:external-config
+  {:fulcro {:html-source-annotations? true}}}}
+```
+
 ## Features
 
 - **Click to annotate** – Click any element with automatic selector identification

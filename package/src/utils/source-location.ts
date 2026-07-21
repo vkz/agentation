@@ -391,21 +391,28 @@ function isUsefulCljsNamespace(ns: string): boolean {
 }
 
 function getFulcroDomSource(element: HTMLElement): SourceLocation | null {
-  const sourceElement = element.closest("[data-fulcro-source]");
-  const rawSource = sourceElement?.getAttribute("data-fulcro-source")?.trim();
-  if (!rawSource) return null;
+  let sourceElement: Element | null = element.closest("[data-fulcro-source]");
 
-  const match = rawSource.match(/^(.+):(\d+|\?)$/);
-  if (!match) return null;
+  while (sourceElement) {
+    const rawSource = sourceElement
+      .getAttribute("data-fulcro-source")
+      ?.trim();
+    const match = rawSource?.match(/^(.+):(\d+|\?)$/);
+    const [, ns, line] = match ?? [];
 
-  const [, ns, line] = match;
-  if (!ns) return null;
-  if (!isUsefulCljsNamespace(ns)) return null;
+    if (ns && line && isUsefulCljsNamespace(ns)) {
+      return {
+        fileName: cljsNamespaceToSourcePath(ns),
+        lineNumber: line === "?" ? 1 : Number.parseInt(line, 10),
+      };
+    }
 
-  return {
-    fileName: cljsNamespaceToSourcePath(ns),
-    lineNumber: line === "?" ? 1 : Number.parseInt(line, 10),
-  };
+    sourceElement = sourceElement.parentElement?.closest(
+      "[data-fulcro-source]",
+    ) ?? null;
+  }
+
+  return null;
 }
 
 function getCljsComponentSource(fiber: ReactFiber): SourceLocation | null {

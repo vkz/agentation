@@ -69,4 +69,39 @@ describe("Fulcro source location detection", () => {
       },
     });
   });
+
+  it("continues past internal Fulcro wrappers to an annotated app ancestor", () => {
+    const appWrapper = document.createElement("div");
+    appWrapper.setAttribute(
+      "data-fulcro-source",
+      "app.benchmarks.smart-benchmark-explorer:219",
+    );
+    const internalWrapper = document.createElement("div");
+    internalWrapper.setAttribute(
+      "data-fulcro-source",
+      "com.fulcrologic.fulcro.react.error-boundaries:1",
+    );
+    const button = document.createElement("button");
+    internalWrapper.appendChild(button);
+    appWrapper.appendChild(internalWrapper);
+    document.body.appendChild(appWrapper);
+
+    attachFiber(button, {
+      _debugSource: {
+        fileName: "/node_modules/agentation/dist/index.js",
+        lineNumber: 2460,
+      },
+      return: null,
+    });
+
+    const result = getSourceLocation(button);
+
+    expect(result).toMatchObject({
+      found: true,
+      source: {
+        fileName: "src/app/benchmarks/smart_benchmark_explorer.cljs",
+        lineNumber: 219,
+      },
+    });
+  });
 });
