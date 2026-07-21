@@ -78,6 +78,32 @@ describe("PageFeedbackToolbarCSS", () => {
       ).not.toThrow();
     });
   });
+
+  describe("host interaction blocking", () => {
+    it("allows native text selection while feedback mode is active", async () => {
+      render(<PageFeedbackToolbarCSS />);
+      fireEvent.click(screen.getByTitle("Start feedback mode"));
+      await waitFor(() =>
+        expect(screen.queryByTitle("Start feedback mode")).toBeNull()
+      );
+
+      const paragraph = document.createElement("p");
+      paragraph.textContent = "Selectable feedback context";
+      const hostMouseDown = vi.fn();
+      paragraph.addEventListener("mousedown", hostMouseDown);
+      document.body.appendChild(paragraph);
+
+      const mouseDown = new MouseEvent("mousedown", {
+        bubbles: true,
+        cancelable: true,
+      });
+      paragraph.dispatchEvent(mouseDown);
+
+      expect(mouseDown.defaultPrevented).toBe(false);
+      expect(hostMouseDown).not.toHaveBeenCalled();
+      paragraph.remove();
+    });
+  });
 });
 
 describe("Annotation type", () => {

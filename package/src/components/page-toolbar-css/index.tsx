@@ -266,10 +266,14 @@ function isRenderableAnnotation(annotation: Annotation): boolean {
   return annotation.status !== "resolved" && annotation.status !== "dismissed";
 }
 
-function stopHostEvent(e: Event): void {
-  e.preventDefault();
+function stopHostPropagation(e: Event): void {
   e.stopPropagation();
   e.stopImmediatePropagation?.();
+}
+
+function stopHostEvent(e: Event): void {
+  e.preventDefault();
+  stopHostPropagation(e);
 }
 
 function isAgentationChrome(element: Element): boolean {
@@ -2231,8 +2235,7 @@ const [settings, setSettings] = useState<ToolbarSettings>(() => {
       if (closestCrossingShadow(target, "[data-annotation-marker]")) return;
       if (closestCrossingShadow(target, "[data-annotation-popup]")) return;
 
-      e.stopPropagation();
-      e.stopImmediatePropagation?.();
+      stopHostPropagation(e);
     };
 
     window.addEventListener("pointerdown", handlePointerEvent, true);
@@ -2258,7 +2261,9 @@ const [settings, setSettings] = useState<ToolbarSettings>(() => {
       if (closestCrossingShadow(target, "[data-annotation-popup]")) return;
 
       if (settings.blockInteractions) {
-        stopHostEvent(e);
+        // Keep the browser's default mousedown behavior so text remains
+        // selectable while preventing host application handlers from firing.
+        stopHostPropagation(e);
       }
 
       // Don't start drag on text elements - allow native text selection
