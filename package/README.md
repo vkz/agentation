@@ -44,21 +44,9 @@ line instead of the compiled React wrapper. Enable them only in development buil
   {:fulcro {:html-source-annotations? true}}}}
 ```
 
-Agentation cannot infer how your project maps namespaces to files. Without configuration, a source is reported
-truthfully as a namespace and line, for example `app.components.combobox:106`. To report a clickable file path,
-provide `resolveFulcroSourcePath`. Return `undefined` for namespaces outside your application and Agentation will keep
-the namespace output.
-
-```tsx
-<Agentation
-  resolveFulcroSourcePath={(namespace) => {
-    const sourcePaths: Record<string, string> = {
-      "app.components.combobox": "src/app/components/combobox.cljs",
-    };
-    return sourcePaths[namespace];
-  }}
-/>
-```
+Fulcro reports namespaces, not source paths. Agentation therefore reports `namespace:line` by default. Consumers can
+provide `resolveFulcroSourcePath` when mounting the toolbar to map their own namespaces to files; returning `undefined`
+keeps the namespace output.
 
 ## Features
 
