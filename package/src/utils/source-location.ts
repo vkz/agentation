@@ -24,16 +24,35 @@ import React from "react";
  * Source location information for a React component
  */
 export interface SourceLocation {
-  /** Absolute or relative file path */
+  /**
+   * Absolute or relative source file path. For Fulcro components without a
+   * configured resolver, this is the reported ClojureScript namespace.
+   */
   fileName: string;
-  /** Line number (1-indexed) */
-  lineNumber: number;
+  /** Line number (1-indexed), or "?" when Fulcro cannot report one. */
+  lineNumber: number | "?";
   /** Column number (0-indexed, may be undefined) */
   columnNumber?: number;
   /** Component display name if available */
   componentName?: string;
   /** React version detected */
   reactVersion?: string;
+  /** Whether fileName is a file path or a namespace identifier. */
+  locationType?: "file" | "namespace";
+}
+
+/** Resolves a Fulcro ClojureScript namespace to a consumer's source file path. */
+export type FulcroSourcePathResolver = (
+  namespace: string,
+) => string | undefined;
+
+/** Optional configuration for source-location detection. */
+export interface SourceLocationOptions {
+  /**
+   * Maps a Fulcro namespace to its actual source file path. Without this,
+   * Fulcro locations report their namespace rather than guessing a path.
+   */
+  resolveFulcroSourcePath?: FulcroSourcePathResolver;
 }
 
 /**
@@ -175,7 +194,8 @@ export function detectReactApp(): {
 
   // Fallback: Check for React root markers on DOM
   const hasReactRoot = document.querySelector("[data-reactroot]") !== null;
-  const hasReactContainer = document.getElementById("root")?._reactRootContainer !== undefined;
+  const rootElement = document.getElementById("root") as ReactDOMElement | null;
+  const hasReactContainer = rootElement?._reactRootContainer !== undefined;
 
   // Check for fiber keys on body's children
   const bodyChildren = document.body.children;
@@ -376,10 +396,6 @@ function findDebugSourceReact19(
   return null;
 }
 
-function cljsNamespaceToSourcePath(ns: string): string {
-  return `src/${ns.replace(/\./g, "/").replace(/-/g, "_")}.cljs`;
-}
-
 function isUsefulCljsNamespace(ns: string): boolean {
   return !(
     ns.startsWith("cljs.") ||
@@ -390,7 +406,26 @@ function isUsefulCljsNamespace(ns: string): boolean {
   );
 }
 
-function getFulcroDomSource(element: HTMLElement): SourceLocation | null {
+function getFulcroSourceLocation(
+  namespace: string,
+  lineNumber: number | "?",
+  options?: SourceLocationOptions,
+  componentName?: string,
+): SourceLocation {
+  const fileName = options?.resolveFulcroSourcePath?.(namespace);
+
+  return {
+    fileName: fileName || namespace,
+    lineNumber,
+    componentName,
+    locationType: fileName ? "file" : "namespace",
+  };
+}
+
+function getFulcroDomSource(
+  element: HTMLElement,
+  options?: SourceLocationOptions,
+): SourceLocation | null {
   let sourceElement: Element | null = element.closest("[data-fulcro-source]");
 
   while (sourceElement) {
@@ -401,10 +436,11 @@ function getFulcroDomSource(element: HTMLElement): SourceLocation | null {
     const [, ns, line] = match ?? [];
 
     if (ns && line && isUsefulCljsNamespace(ns)) {
-      return {
-        fileName: cljsNamespaceToSourcePath(ns),
-        lineNumber: line === "?" ? 1 : Number.parseInt(line, 10),
-      };
+      return getFulcroSourceLocation(
+        ns,
+        line === "?" ? "?" : Number.parseInt(line, 10),
+        options,
+      );
     }
 
     sourceElement = sourceElement.parentElement?.closest(
@@ -415,7 +451,10 @@ function getFulcroDomSource(element: HTMLElement): SourceLocation | null {
   return null;
 }
 
-function getCljsComponentSource(fiber: ReactFiber): SourceLocation | null {
+function getCljsComponentSource(
+  fiber: ReactFiber,
+  options?: SourceLocationOptions,
+): SourceLocation | null {
   const type = fiber.type as
     | {
         displayName?: string;
@@ -429,22 +468,19 @@ function getCljsComponentSource(fiber: ReactFiber): SourceLocation | null {
   if (!ns) return null;
   if (!isUsefulCljsNamespace(ns)) return null;
 
-  return {
-    fileName: cljsNamespaceToSourcePath(ns),
-    lineNumber: 1,
-    componentName,
-  };
+  return getFulcroSourceLocation(ns, "?", options, componentName);
 }
 
 function findCljsComponentSource(
   fiber: ReactFiber,
-  maxDepth = 50
+  maxDepth = 50,
+  options?: SourceLocationOptions,
 ): SourceLocation | null {
   let current: ReactFiber | null | undefined = fiber;
   let depth = 0;
 
   while (current && depth < maxDepth) {
-    const source = getCljsComponentSource(current);
+    const source = getCljsComponentSource(current, options);
     if (source) return source;
 
     current = current.return;
@@ -750,8 +786,11 @@ function probeSourceWalk(
  * }
  * ```
  */
-export function getSourceLocation(element: HTMLElement): SourceLocationResult {
-  const fulcroDomSource = getFulcroDomSource(element);
+export function getSourceLocation(
+  element: HTMLElement,
+  options?: SourceLocationOptions,
+): SourceLocationResult {
+  const fulcroDomSource = getFulcroDomSource(element, options);
   if (fulcroDomSource) {
     return {
       found: true,
@@ -796,7 +835,7 @@ export function getSourceLocation(element: HTMLElement): SourceLocationResult {
     };
   }
 
-  const cljsSource = findCljsComponentSource(fiber);
+  const cljsSource = findCljsComponentSource(fiber, 50, options);
   if (cljsSource) {
     return {
       found: true,
@@ -840,7 +879,7 @@ export function formatSourceLocation(
   source: SourceLocation,
   format: "path" | "vscode" = "path"
 ): string {
-  const { fileName, lineNumber, columnNumber } = source;
+  const { fileName, lineNumber, columnNumber, locationType } = source;
 
   // Build line:column suffix
   let location = `${fileName}:${lineNumber}`;
@@ -848,7 +887,7 @@ export function formatSourceLocation(
     location += `:${columnNumber}`;
   }
 
-  if (format === "vscode") {
+  if (format === "vscode" && locationType !== "namespace") {
     // VSCode can open files via URL protocol
     // Assumes fileName is absolute or can be resolved
     return `vscode://file${fileName.startsWith("/") ? "" : "/"}${location}`;
@@ -863,8 +902,11 @@ export function formatSourceLocation(
  * @param elements - Array of DOM elements
  * @returns Array of source location results
  */
-export function getSourceLocations(elements: HTMLElement[]): SourceLocationResult[] {
-  return elements.map((element) => getSourceLocation(element));
+export function getSourceLocations(
+  elements: HTMLElement[],
+  options?: SourceLocationOptions,
+): SourceLocationResult[] {
+  return elements.map((element) => getSourceLocation(element, options));
 }
 
 /**
@@ -879,13 +921,14 @@ export function getSourceLocations(elements: HTMLElement[]): SourceLocationResul
  */
 export function findNearestComponentSource(
   element: HTMLElement,
-  maxAncestors = 10
+  maxAncestors = 10,
+  options?: SourceLocationOptions,
 ): SourceLocationResult {
   let current: HTMLElement | null = element;
   let depth = 0;
 
   while (current && depth < maxAncestors) {
-    const result = getSourceLocation(current);
+    const result = getSourceLocation(current, options);
 
     // Return first successful result
     if (result.found) {
@@ -899,7 +942,7 @@ export function findNearestComponentSource(
   }
 
   // Return result for original element (will explain why not found)
-  return getSourceLocation(element);
+  return getSourceLocation(element, options);
 }
 
 /**

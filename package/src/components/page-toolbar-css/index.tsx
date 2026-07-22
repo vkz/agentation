@@ -74,6 +74,7 @@ import {
   getSourceLocation,
   findNearestComponentSource,
   formatSourceLocation,
+  type FulcroSourcePathResolver,
 } from "../../utils/source-location";
 import {
   freeze as freezeAll,
@@ -284,10 +285,14 @@ function isAgentationChrome(element: Element): boolean {
   );
 }
 
-function isElementTopmostAtPoint(element: HTMLElement, x: number, y: number): boolean {
+export function isElementTopmostAtPoint(
+  element: HTMLElement,
+  x: number,
+  y: number,
+): boolean {
   const topElement = document
     .elementsFromPoint(x, y)
-    .find((candidate) => candidate instanceof HTMLElement && !isAgentationChrome(candidate));
+    .find((candidate) => !isAgentationChrome(candidate));
 
   return Boolean(topElement && (topElement === element || element.contains(topElement)));
 }
@@ -366,9 +371,15 @@ function isMeaningfulDragTarget(element: HTMLElement): boolean {
   return false;
 }
 
-function detectSourceFile(element: Element): string | undefined {
-  const result = getSourceLocation(element as HTMLElement);
-  const loc = result.found ? result : findNearestComponentSource(element as HTMLElement);
+function detectSourceFile(
+  element: Element,
+  resolveFulcroSourcePath?: FulcroSourcePathResolver,
+): string | undefined {
+  const options = { resolveFulcroSourcePath };
+  const result = getSourceLocation(element as HTMLElement, options);
+  const loc = result.found
+    ? result
+    : findNearestComponentSource(element as HTMLElement, 10, options);
   if (loc.found && loc.source) {
     return formatSourceLocation(loc.source, "path");
   }
@@ -411,6 +422,8 @@ export type PageFeedbackToolbarCSSProps = {
   onSessionCreated?: (sessionId: string) => void;
   /** Webhook URL to receive annotation events. */
   webhookUrl?: string;
+  /** Resolves a Fulcro namespace to the consumer's actual source file path. */
+  resolveFulcroSourcePath?: FulcroSourcePathResolver;
   /** Custom class name applied to the toolbar container. Use to adjust positioning or z-index. */
   className?: string;
 };
@@ -437,6 +450,7 @@ export function PageFeedbackToolbarCSS({
   sessionId: initialSessionId,
   onSessionCreated,
   webhookUrl,
+  resolveFulcroSourcePath,
   className: userClassName,
 }: PageFeedbackToolbarCSSProps = {}) {
   const [isActive, setIsActive] = useState(false);
@@ -1799,7 +1813,7 @@ const [settings, setSettings] = useState<ToolbarSettings>(() => {
         cssClasses: getElementClasses(firstEl),
         nearbyText: getNearbyText(firstEl),
         reactComponents: firstItem.reactComponents,
-        sourceFile: detectSourceFile(firstEl),
+        sourceFile: detectSourceFile(firstEl, resolveFulcroSourcePath),
       });
     } else {
       // Multiple elements - multi-select annotation
@@ -1858,13 +1872,13 @@ const [settings, setSettings] = useState<ToolbarSettings>(() => {
         nearbyElements: getNearbyElements(firstEl),
         cssClasses: getElementClasses(firstEl),
         nearbyText: getNearbyText(firstEl),
-        sourceFile: detectSourceFile(firstEl),
+        sourceFile: detectSourceFile(firstEl, resolveFulcroSourcePath),
       });
     }
 
     setPendingMultiSelectElements([]);
     setHoverInfo(null);
-  }, [pendingMultiSelectElements]);
+  }, [pendingMultiSelectElements, resolveFulcroSourcePath]);
 
   // Reset state when deactivating
   useEffect(() => {
@@ -2157,7 +2171,7 @@ const [settings, setSettings] = useState<ToolbarSettings>(() => {
         computedStylesObj,
         nearbyElements: getNearbyElements(elementUnder),
         reactComponents: reactComponents ?? undefined,
-        sourceFile: detectSourceFile(elementUnder),
+        sourceFile: detectSourceFile(elementUnder, resolveFulcroSourcePath),
         targetElement: elementUnder, // Store for live position queries
       });
       setHoverInfo(null);
@@ -2175,6 +2189,7 @@ const [settings, setSettings] = useState<ToolbarSettings>(() => {
     settings.blockInteractions,
     effectiveReactMode,
     pendingMultiSelectElements,
+    resolveFulcroSourcePath,
   ]);
 
   // Cmd+shift+click multi-select: keyup listener for modifier release
@@ -2610,7 +2625,7 @@ const [settings, setSettings] = useState<ToolbarSettings>(() => {
             nearbyElements: getNearbyElements(firstElement),
             cssClasses: getElementClasses(firstElement),
             nearbyText: getNearbyText(firstElement),
-            sourceFile: detectSourceFile(firstElement),
+            sourceFile: detectSourceFile(firstElement, resolveFulcroSourcePath),
           });
         } else {
           // No elements selected, but allow annotation on empty area
@@ -2651,7 +2666,7 @@ const [settings, setSettings] = useState<ToolbarSettings>(() => {
 
     window.addEventListener("mouseup", handleMouseUp, true);
     return () => window.removeEventListener("mouseup", handleMouseUp, true);
-  }, [isActive, isDragging, settings.blockInteractions]);
+  }, [isActive, isDragging, settings.blockInteractions, resolveFulcroSourcePath]);
 
   // Fire webhook for annotation events - returns true on success, false on failure
   const fireWebhook = useCallback(

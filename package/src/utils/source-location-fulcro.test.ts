@@ -1,8 +1,8 @@
 /**
  * @vitest-environment jsdom
  */
-import { describe, it, expect, beforeEach } from "vitest";
-import { getSourceLocation } from "./source-location";
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import { formatSourceLocation, getSourceLocation } from "./source-location";
 
 function attachFiber(element: HTMLElement, fiber: unknown): void {
   (element as unknown as Record<string, unknown>)["__reactFiber$test"] = fiber;
@@ -13,7 +13,7 @@ describe("Fulcro source location detection", () => {
     document.body.innerHTML = "";
   });
 
-  it("uses Fulcro DOM source annotations before React fiber fallbacks", () => {
+  it("reports a Fulcro namespace and line without fabricating a source path", () => {
     const wrapper = document.createElement("div");
     wrapper.setAttribute("data-fulcro-source", "app.components.combobox:106");
     const input = document.createElement("input");
@@ -34,13 +34,69 @@ describe("Fulcro source location detection", () => {
     expect(result).toMatchObject({
       found: true,
       source: {
-        fileName: "src/app/components/combobox.cljs",
+        fileName: "app.components.combobox",
         lineNumber: 106,
+        locationType: "namespace",
+      },
+    });
+    expect(formatSourceLocation(result.source!, "path")).toBe(
+      "app.components.combobox:106",
+    );
+    expect(formatSourceLocation(result.source!, "vscode")).toBe(
+      "app.components.combobox:106",
+    );
+  });
+
+  it("uses a configured resolver to report an actual Fulcro source path", () => {
+    const wrapper = document.createElement("div");
+    wrapper.setAttribute(
+      "data-fulcro-source",
+      "app.benchmarks.smart-benchmark-explorer:219",
+    );
+    const button = document.createElement("button");
+    wrapper.appendChild(button);
+    document.body.appendChild(wrapper);
+    const resolveFulcroSourcePath = vi.fn(
+      (namespace: string) => `/workspace/${namespace}.cljs`,
+    );
+
+    const result = getSourceLocation(button, { resolveFulcroSourcePath });
+
+    expect(resolveFulcroSourcePath).toHaveBeenCalledWith(
+      "app.benchmarks.smart-benchmark-explorer",
+    );
+    expect(result).toMatchObject({
+      found: true,
+      source: {
+        fileName: "/workspace/app.benchmarks.smart-benchmark-explorer.cljs",
+        lineNumber: 219,
+        locationType: "file",
       },
     });
   });
 
-  it("skips internal Fulcro namespaces and falls back to app CLJS component names", () => {
+  it("preserves an unknown annotated line instead of substituting one", () => {
+    const wrapper = document.createElement("div");
+    wrapper.setAttribute("data-fulcro-source", "app.components.combobox:?");
+    const input = document.createElement("input");
+    wrapper.appendChild(input);
+    document.body.appendChild(wrapper);
+
+    const result = getSourceLocation(input);
+
+    expect(result).toMatchObject({
+      found: true,
+      source: {
+        fileName: "app.components.combobox",
+        lineNumber: "?",
+      },
+    });
+    expect(formatSourceLocation(result.source!)).toBe(
+      "app.components.combobox:?",
+    );
+  });
+
+  it("skips internal Fulcro namespaces and reports app component namespace when no line is available", () => {
     const wrapper = document.createElement("div");
     wrapper.setAttribute(
       "data-fulcro-source",
@@ -63,9 +119,10 @@ describe("Fulcro source location detection", () => {
     expect(result).toMatchObject({
       found: true,
       source: {
-        fileName: "src/app/benchmarks/compare/screen.cljs",
-        lineNumber: 1,
+        fileName: "app.benchmarks.compare.screen",
+        lineNumber: "?",
         componentName: "app.benchmarks.compare.screen/CompareForm",
+        locationType: "namespace",
       },
     });
   });
@@ -99,8 +156,9 @@ describe("Fulcro source location detection", () => {
     expect(result).toMatchObject({
       found: true,
       source: {
-        fileName: "src/app/benchmarks/smart_benchmark_explorer.cljs",
+        fileName: "app.benchmarks.smart-benchmark-explorer",
         lineNumber: 219,
+        locationType: "namespace",
       },
     });
   });

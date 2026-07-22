@@ -35,13 +35,29 @@ The toolbar appears in the bottom-right corner. Click to activate, then click an
 
 ### Fulcro source locations
 
-The `vkz` fork recognizes Fulcro's `data-fulcro-source` DOM annotations and reports the corresponding ClojureScript
-file and line instead of the compiled React wrapper. Enable them only in development builds:
+The `vkz` fork recognizes Fulcro's `data-fulcro-source` DOM annotations and reports the ClojureScript namespace and
+line instead of the compiled React wrapper. Enable them only in development builds:
 
 ```clojure
 {:compiler-options
  {:external-config
   {:fulcro {:html-source-annotations? true}}}}
+```
+
+Agentation cannot infer how your project maps namespaces to files. Without configuration, a source is reported
+truthfully as a namespace and line, for example `app.components.combobox:106`. To report a clickable file path,
+provide `resolveFulcroSourcePath`. Return `undefined` for namespaces outside your application and Agentation will keep
+the namespace output.
+
+```tsx
+<Agentation
+  resolveFulcroSourcePath={(namespace) => {
+    const sourcePaths: Record<string, string> = {
+      "app.components.combobox": "src/app/components/combobox.cljs",
+    };
+    return sourcePaths[namespace];
+  }}
+/>
 ```
 
 ## Features
@@ -71,6 +87,7 @@ file and line instead of the compiled React wrapper. Enable them only in develop
 | `sessionId` | `string` | - | Pre-existing session ID to join |
 | `onSessionCreated` | `(sessionId: string) => void` | - | Called when a new session is created |
 | `webhookUrl` | `string` | - | Webhook URL to receive annotation events |
+| `resolveFulcroSourcePath` | `(namespace: string) => string \| undefined` | - | Maps Fulcro namespaces to your actual ClojureScript source files |
 
 ### Programmatic Integration
 
